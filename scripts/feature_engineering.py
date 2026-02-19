@@ -36,6 +36,9 @@ df["RS"] = df["acc_std"] + df["sudden_brake_count"]
 
 df["ES"] = df["avg_co2"] + df["avg_fuel"]
 
+# Replace NaN values (from std calculation when only 1 vehicle)
+df.fillna(0, inplace=True)
+
 # -----------------------------
 # 5️⃣ Normalization
 # -----------------------------
