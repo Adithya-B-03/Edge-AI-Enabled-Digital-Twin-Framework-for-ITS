@@ -7,7 +7,7 @@ traci.start(sumoCmd)
 
 data = []
 
-for step in range(3600):
+for step in range(1500):
     traci.simulationStep()
     
     vehicle_ids = traci.vehicle.getIDList()
