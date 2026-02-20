@@ -1,77 +1,36 @@
 import traci
-import pandas as pd
 import numpy as np
+import pandas as pd
 import joblib
-import os
-import sys
 
-# -----------------------------
-# 1️⃣ Load trained ML model
-# -----------------------------
-model = joblib.load("models/parcl_model.pkl")
+# ==========================================
+# LOAD ENSEMBLE MODELS
+# ==========================================
+rf = joblib.load("models/rf.pkl")
+gb = joblib.load("models/gb.pkl")
 
-# -----------------------------
-# 2️⃣ SUMO configuration
-# -----------------------------
-sumoCmd = [
-    "sumo-gui",
-    "-c", "config/map.sumo.cfg"
-]
-
+# ==========================================
+# START SUMO
+# ==========================================
+sumoCmd = ["sumo-gui", "-c", "config/map.sumo.cfg"]
 traci.start(sumoCmd)
 
-# Your traffic light ID
-TLS_ID = "256606767"
+# Dynamically detect traffic light ID
+tls_list = traci.trafficlight.getIDList()
+if len(tls_list) == 0:
+    print("No traffic lights found!")
+    traci.close()
+    exit()
 
-print("Simulation started...")
+TLS_ID = tls_list[0]
+print("Advanced Intelligent Controller Started")
+print("Using TLS:", TLS_ID)
 
-# -----------------------------
-# 3️⃣ Simulation Loop
-# -----------------------------
-while traci.simulation.getMinExpectedNumber() > 0:
-
-    traci.simulationStep()
-
-    # Get all vehicle IDs
-    vehicle_ids = traci.vehicle.getIDList()
-
-    if len(vehicle_ids) == 0:
-        continue
-
-    speeds = []
-    accelerations = []
-    co2_vals = []
-    fuel_vals = []
-
-    for vid in vehicle_ids:
-        speeds.append(traci.vehicle.getSpeed(vid))
-        accelerations.append(traci.vehicle.getAcceleration(vid))
-        co2_vals.append(traci.vehicle.getCO2Emission(vid))
-        fuel_vals.append(traci.vehicle.getFuelConsumption(vid))
-
-    # -----------------------------
-    # 4️⃣ Compute Live Features
-    # -----------------------------
-    vehicle_count = len(vehicle_ids)
-    avg_speed = np.mean(speeds)
-    speed_std = np.std(speeds)
-    avg_acc = np.mean(accelerations)
-    acc_std = np.std(accelerations)
-    avg_co2 = np.mean(co2_vals)
-    avg_fuel = np.mean(fuel_vals)
-    sudden_brake_count = sum(a < -3 for a in accelerations)
-
-    # Create feature vector
-    X_live = pd.DataFrame([[
-        vehicle_count,
-        avg_speed,
-        speed_std,
-        avg_acc,
-        acc_std,
-        avg_co2,
-        avg_fuel,
-        sudden_brake_count
-    ]], columns=[
+# ==========================================
+# ENSEMBLE PREDICTION FUNCTION
+# ==========================================
+def predict_tis(features):
+    X_live = pd.DataFrame([features], columns=[
         "vehicle_count",
         "avg_speed",
         "speed_std",
@@ -82,30 +41,107 @@ while traci.simulation.getMinExpectedNumber() > 0:
         "sudden_brake_count"
     ])
 
-    # -----------------------------
-    # 5️⃣ Predict TIS
-    # -----------------------------
-    predicted_TIS = model.predict(X_live)[0]
+    tis_rf = rf.predict(X_live)[0]
+    tis_gb = gb.predict(X_live)[0]
 
-    print("Predicted TIS:", round(predicted_TIS, 3))
+    return (tis_rf + tis_gb) / 2
 
-    # -----------------------------
-    # 6️⃣ Adaptive Signal Logic
-    # -----------------------------
-    if predicted_TIS > 0.7:
-        # High congestion → extend green
+
+# ==========================================
+# MAIN CONTROL LOOP
+# ==========================================
+while traci.simulation.getMinExpectedNumber() > 0:
+    traci.simulationStep()
+
+    # ======================================
+    # 🚑 PRIORITY CHECK
+    # ======================================
+    priority_detected = False
+
+    for vid in traci.vehicle.getIDList():
+        vtype = traci.vehicle.getTypeID(vid)
+        if "emergency" in vtype.lower():
+            priority_detected = True
+            break
+
+    if priority_detected:
+        print("🚑 Emergency detected! Extending green.")
         traci.trafficlight.setPhaseDuration(TLS_ID, 40)
+        continue
 
-    elif predicted_TIS < 0.3:
-        # Low congestion → reduce green
-        traci.trafficlight.setPhaseDuration(TLS_ID, 15)
+    # ======================================
+    # 🚦 LANE-LEVEL TIS COMPUTATION
+    # ======================================
+    controlled_lanes = list(set(
+        traci.trafficlight.getControlledLanes(TLS_ID)
+    ))
 
-    else:
-        # Normal traffic
-        traci.trafficlight.setPhaseDuration(TLS_ID, 25)
+    lane_tis = {}
 
-# -----------------------------
-# 7️⃣ Close Simulation
-# -----------------------------
+    for lane in controlled_lanes:
+        veh_ids = traci.lane.getLastStepVehicleIDs(lane)
+
+        if len(veh_ids) == 0:
+            lane_tis[lane] = 0
+            continue
+
+        speeds = [traci.vehicle.getSpeed(v) for v in veh_ids]
+        accs = [traci.vehicle.getAcceleration(v) for v in veh_ids]
+        co2 = [traci.vehicle.getCO2Emission(v) for v in veh_ids]
+        fuel = [traci.vehicle.getFuelConsumption(v) for v in veh_ids]
+
+        features = [
+            len(veh_ids),
+            np.mean(speeds),
+            np.std(speeds),
+            np.mean(accs),
+            np.std(accs),
+            np.mean(co2),
+            np.mean(fuel),
+            sum(a < -3 for a in accs)
+        ]
+
+        lane_tis[lane] = predict_tis(features)
+
+    # ======================================
+    # 📊 PHASE-LEVEL UTILITY COMPUTATION
+    # ======================================
+    logics = traci.trafficlight.getAllProgramLogics(TLS_ID)
+    phases = logics[0].phases
+
+    phase_utilities = []
+
+    controlled_lanes = traci.trafficlight.getControlledLanes(TLS_ID)
+
+    for phase_index, phase in enumerate(phases):
+        state = phase.state  # e.g., "GrGr"
+        utility = 0
+
+        for lane_index, signal in enumerate(state):
+            if signal.lower() == 'g':  # green signal
+                lane = controlled_lanes[lane_index]
+                utility += lane_tis.get(lane, 0)
+
+        phase_utilities.append(utility)
+
+    # Select best phase
+    best_phase = int(np.argmax(phase_utilities))
+    best_utility = phase_utilities[best_phase]
+
+    # ======================================
+    # 🚦 APPLY BEST PHASE
+    # ======================================
+    traci.trafficlight.setPhase(TLS_ID, best_phase)
+
+    green_time = 15 + int(30 * best_utility)
+    traci.trafficlight.setPhaseDuration(TLS_ID, green_time)
+
+    print("Selected Phase:", best_phase,
+          "| Utility:", round(best_utility, 3),
+          "| Green:", green_time)
+
+# ==========================================
+# END SIMULATION
+# ==========================================
 traci.close()
 print("Simulation ended.")

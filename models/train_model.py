@@ -1,21 +1,13 @@
 import pandas as pd
-import numpy as np
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_squared_error, r2_score
 import joblib
 
-# -----------------------------
-# 1️⃣ Load intelligent dataset
-# -----------------------------
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.metrics import r2_score
+
+# Load dataset
 df = pd.read_csv("output/intelligent_dataset.csv")
 
-print("Dataset Loaded")
-print("Shape:", df.shape)
-
-# -----------------------------
-# 2️⃣ Define Features (X) and Target (y)
-# -----------------------------
 X = df[[
     "vehicle_count",
     "avg_speed",
@@ -29,44 +21,23 @@ X = df[[
 
 y = df["TIS"]
 
-# -----------------------------
-# 3️⃣ Train-Test Split
-# -----------------------------
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42
 )
 
-print("Training samples:", len(X_train))
-print("Testing samples:", len(X_test))
+# Model 1 - Random Forest
+rf = RandomForestRegressor()
+rf.fit(X_train, y_train)
 
-# -----------------------------
-# 4️⃣ Initialize Model
-# -----------------------------
-model = RandomForestRegressor(
-    n_estimators=100,
-    random_state=42
-)
+# Model 2 - Gradient Boosting
+gb = GradientBoostingRegressor()
+gb.fit(X_train, y_train)
 
-# -----------------------------
-# 5️⃣ Train Model
-# -----------------------------
-model.fit(X_train, y_train)
+print("RF R2:", r2_score(y_test, rf.predict(X_test)))
+print("GB R2:", r2_score(y_test, gb.predict(X_test)))
 
-# -----------------------------
-# 6️⃣ Evaluate Model
-# -----------------------------
-pred = model.predict(X_test)
+# Save models
+joblib.dump(rf, "models/rf.pkl")
+joblib.dump(gb, "models/gb.pkl")
 
-mse = mean_squared_error(y_test, pred)
-r2 = r2_score(y_test, pred)
-
-print("\nModel Performance:")
-print("MSE:", mse)
-print("R2 Score:", r2)
-
-# -----------------------------
-# 7️⃣ Save Model
-# -----------------------------
-joblib.dump(model, "models/parcl_model.pkl")
-
-print("\nModel saved successfully as parcl_model.pkl")
+print("Ensemble models saved successfully.")

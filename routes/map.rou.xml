@@ -35,8 +35,24 @@
 </duarouterConfiguration>
 -->
 
+	   
 <routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/routes_file.xsd">
-    <vehicle id="0" depart="0.00">
+
+	 <vType id="emergency"
+           accel="3.0"
+           decel="4.5"
+           sigma="0"
+           length="5"
+           maxSpeed="25"
+           guiShape="emergency"/>
+
+    <vehicle id="emergency_1"
+         type="emergency"
+         depart="50">
+		<route edges="-27347951#0 27346855#1 -25466343#9 -25466343#8 -25466343#7 28681578#10 28681578#11 28681578#12 28681578#13 -1270468053"/>
+	</vehicle>
+		 
+	<vehicle id="0" depart="0.00">
         <route edges="215569984#5 -25466343#10 -25466343#9 -25466343#8 -25466343#7 -25466343#6 -27433074#2 -27433074#1 -27433074#0 -27189993#1 1249839431 -1249839431"/>
     </vehicle>
     <vehicle id="1" depart="1.00">
